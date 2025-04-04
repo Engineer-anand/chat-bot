@@ -1,47 +1,85 @@
-import express from "express";
-import cors from "cors";
-import dotenv from "dotenv";
-import { GoogleGenerativeAI } from "@google/generative-ai";
-
-dotenv.config();
+const express = require("express");
+const cors = require("cors");
+const bodyParser = require("body-parser");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+require("dotenv").config();
 
 const app = express();
-app.use(express.json());
-app.use(cors());
+const PORT = 3000;
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+app.use(cors());
+app.use(bodyParser.json());
+
+const apiKey = process.env.GEMINI_API_KEY;
+const genAI = new GoogleGenerativeAI(apiKey);
+
 const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
-async function fetchGeminiResponse(message) {
+const generationConfig = {
+  temperature: 1,
+  topP: 0.9,
+  topK: 40,
+  maxOutputTokens: 3000,
+};
+
+// Convert * bullets to proper HTML
+function beautifyResponse(rawText) {
+  const lines = rawText.split("\n");
+  let formatted = "";
+
+  let inList = false;
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+
+    if (trimmed.startsWith("*")) {
+      if (!inList) {
+        formatted += "<ul>";
+        inList = true;
+      }
+      const clean = trimmed.replace(/^\*+/, "").trim();
+      formatted += `<li>${clean}</li>`;
+    } else {
+      if (inList) {
+        formatted += "</ul>";
+        inList = false;
+      }
+      formatted += `<p>${trimmed}</p>`;
+    }
+  });
+
+  if (inList) formatted += "</ul>";
+
+  return formatted;
+}
+
+// Starting prompt
+const initialPrompt = `You are FinBotX – an AI-powered Indian financial assistant. You only respond for Indian users in INR and related financial products. Respond professionally with helpful insights. Format response with <ul>, <ol>, <p>, <strong> where needed.`;
+
+app.post("/api/chat", async (req, res) => {
+  const { message } = req.body;
+
+  try {
     const chatSession = model.startChat({
-        history: [
-            {
-                role: "user",
-                parts: [{ text: "You are Taurus, a friendly financial assistant who works for FinBotX..." }],
-            },
-            {
-                role: "model",
-                parts: [{ text: "Okay, I understand. I am Taurus, FinBotX's friendly financial assistant..." }],
-            },
-        ],
+      generationConfig,
+      history: [
+        {
+          role: "user",
+          parts: [{ text: initialPrompt }],
+        },
+      ],
     });
 
     const result = await chatSession.sendMessage(message);
-    return result.response.text();
-}
+    const rawText = result.response.text();
+    const html = beautifyResponse(rawText);
 
-app.post("/api/chat", async (req, res) => {
-    try {
-        const { message } = req.body;
-        if (!message) return res.status(400).json({ error: "Message is required" });
-
-        const response = await fetchGeminiResponse(message);
-        res.json({ response });
-    } catch (error) {
-        console.error("Error:", error);
-        res.status(500).json({ error: "Internal Server Error" });
-    }
+    res.json({ html });
+  } catch (err) {
+    console.error("Gemini error:", err);
+    res.status(500).json({ error: "Something went wrong!" });
+  }
 });
 
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`✅ Server running on http://localhost:${PORT}`);
+});
